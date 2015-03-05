@@ -1,4 +1,4 @@
-package plex
+package plexible
 
 import (
 	"bufio"

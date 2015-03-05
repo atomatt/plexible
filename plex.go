@@ -1,4 +1,4 @@
-package plex
+package plexible
 
 // MediaContainer is the top-level struct most Plex communication stanzas.
 type MediaContainer struct {

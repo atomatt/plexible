@@ -6,7 +6,7 @@ import (
 	"os/signal"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/emgee/goplex"
+	"github.com/emgee/plexible"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 	logger := logrus.New()
 	logger.Level = logLevel
 
-	client := plex.NewClient(
+	client := plexible.NewClient(
 		"862b2506-ba0a-11e4-b501-cf0a1568e6a3",
 		"sharkbait",
 		"GoPlex",
@@ -48,18 +48,18 @@ func main() {
 
 type Player struct {
 	logger   *logrus.Logger
-	cmds     chan plex.PlayerCommand
-	timeline plex.Timeline
-	ch       chan plex.Timeline
+	cmds     chan plexible.PlayerCommand
+	timeline plexible.Timeline
+	ch       chan plexible.Timeline
 }
 
 func NewPlayer(logger *logrus.Logger) *Player {
 	p := &Player{
 		logger: logger,
-		cmds:   make(chan plex.PlayerCommand),
-		timeline: plex.Timeline{
-			Type:  plex.TypeMusic,
-			State: plex.StateStopped,
+		cmds:   make(chan plexible.PlayerCommand),
+		timeline: plexible.Timeline{
+			Type:  plexible.TypeMusic,
+			State: plexible.StateStopped,
 		},
 	}
 	go p.cmdLoop()
@@ -67,15 +67,15 @@ func NewPlayer(logger *logrus.Logger) *Player {
 }
 
 func (p *Player) Capabilities() []string {
-	return []string{plex.CapabilityTimeline, plex.CapabilityPlayback}
+	return []string{plexible.CapabilityTimeline, plexible.CapabilityPlayback}
 }
 
-func (p *Player) CommandChan() chan plex.PlayerCommand {
+func (p *Player) CommandChan() chan plexible.PlayerCommand {
 	return p.cmds
 }
 
-func (p *Player) Subscribe() chan plex.Timeline {
-	p.ch = make(chan plex.Timeline, 1)
+func (p *Player) Subscribe() chan plexible.Timeline {
+	p.ch = make(chan plexible.Timeline, 1)
 	p.ch <- p.timeline
 	return p.ch
 }
@@ -89,13 +89,13 @@ func (p *Player) cmdLoop() {
 		p.logger.Debugf("Cmd: %v, Params: %v", cmd.Type, cmd.Params)
 		switch cmd.Type {
 		case "playMedia":
-			p.timeline.State = plex.StatePlaying
+			p.timeline.State = plexible.StatePlaying
 		case "pause":
-			p.timeline.State = plex.StatePaused
+			p.timeline.State = plexible.StatePaused
 		case "play":
-			p.timeline.State = plex.StatePlaying
+			p.timeline.State = plexible.StatePlaying
 		case "stop":
-			p.timeline.State = plex.StateStopped
+			p.timeline.State = plexible.StateStopped
 		}
 		p.ch <- p.timeline
 	}
