@@ -86,7 +86,7 @@ func (p *Player) cmdLoop() {
 	defer p.logger.Info("player loop ended")
 	for {
 		cmd := <-p.cmds
-		p.logger.Infof("player %v cmd: %s %s", p, cmd.Type, cmd.Params)
+		p.logger.Debugf("Cmd: %v, Params: %v", cmd.Type, cmd.Params)
 		switch cmd.Type {
 		case "playMedia":
 			p.timeline.State = plex.StatePlaying
