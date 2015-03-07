@@ -108,6 +108,7 @@ func (c *Client) updateTimeline(p Player, t Timeline) {
 	c.Logger.Debugf("timeline %v from player %v", t, p)
 	c.timeline = t
 	c.wakeListeners()
+	c.notifyControllers()
 }
 
 func (c *Client) Start() error {
@@ -328,6 +329,44 @@ func updateControllerTimer(c *Client, cntrllr *controller) {
 	cntrllr.timer = time.AfterFunc(controllerTimeout, func() {
 		c.removeController(cntrllr.clientID)
 	})
+}
+
+func (c *Client) notifyControllers() {
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
+	for _, cntrllr := range c.controllers {
+		c.Logger.Debugf("sending timeline to controller %s [%s]",
+			cntrllr.deviceName, cntrllr.clientID)
+
+		mc := MediaContainer{
+			MachineIdentifier: c.ID,
+			Timelines:         []Timeline{c.timeline},
+		}
+		buf, err := xml.Marshal(mc)
+		if err != nil {
+			c.Logger.Error("error encoding controller timeline xml: %s", err)
+			return
+		}
+
+		req, err := http.NewRequest("POST", cntrllr.url+":/timeline", bytes.NewReader(buf))
+		if err != nil {
+			c.Logger.Error("error creating request: %s", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("X-Plex-Client-Identifier", c.ID)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.Logger.Errorf("error posting timeline to device %s [%s]: %s",
+				cntrllr.deviceName, cntrllr.clientID, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		c.Logger.Debugf("timeline post to %s [%s] returned %s",
+			cntrllr.deviceName, cntrllr.clientID, resp.Status)
+	}
 }
 
 func startClientDiscovery(c *Client) error {
