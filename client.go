@@ -91,7 +91,7 @@ func (c *Client) AddPlayer(p Player) {
 func (c *Client) updateTimeline(p Player, t Timeline) {
 	c.timelineLock.Lock()
 	defer c.timelineLock.Unlock()
-	c.Logger.Infof("timeline %v from player %v", t, p)
+	c.Logger.Debugf("timeline %v from player %v", t, p)
 	c.timeline = t
 	c.wakeListeners()
 }
@@ -159,7 +159,7 @@ func startClientAPI(c *Client) error {
 
 		// Block until there's a timeline update or the timeout expires.
 		if wait {
-			c.Logger.Infof("waiting for timeline update")
+			c.Logger.Debugf("waiting for timeline update")
 			ch := make(chan bool)
 			c.addListener(ch)
 			defer c.removeListener(ch)
@@ -283,7 +283,7 @@ func startClientDiscovery(c *Client) error {
 			}
 
 			msg := clientMsg("HTTP/1.0 200 OK", c)
-			c.Logger.Infof("client discovery request from %s", addr)
+			c.Logger.Debugf("client discovery request from %s", addr)
 			c.Logger.Debugf("sending client discovery response: %q", msg)
 			c.discoveryConn.WriteTo(msg, addr)
 		}
