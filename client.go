@@ -16,6 +16,9 @@ import (
 	"github.com/Sirupsen/logrus"
 )
 
+// Time after which a subscribed controller is removed.
+const controllerTimeout = time.Second * 90
+
 type Player interface {
 	Capabilities() []string
 	CommandChan() chan PlayerCommand
@@ -25,6 +28,12 @@ type Player interface {
 type PlayerCommand struct {
 	Type   string
 	Params url.Values
+}
+
+type controller struct {
+	clientID   string
+	deviceName string
+	timer      *time.Timer
 }
 
 type Client struct {
@@ -50,6 +59,10 @@ type Client struct {
 	timelineLock  sync.Mutex
 	listeners     []chan bool
 	listenersLock sync.Mutex
+
+	// Controllers
+	controllers     []*controller
+	controllersLock sync.Mutex
 
 	// Discovery
 	discoveryConn *net.UDPConn
@@ -199,6 +212,17 @@ func startClientAPI(c *Client) error {
 		w.WriteHeader(200)
 	})
 
+	api.HandleFunc("/player/timeline/subscribe", func(w http.ResponseWriter, r *http.Request) {
+		c.addController(
+			r.Header.Get("X-Plex-Client-Identifier"),
+			r.Header.Get("X-Plex-Device-Name"),
+		)
+	})
+
+	api.HandleFunc("/player/timeline/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
+		c.removeController(r.Header.Get("X-Plex-Client-Identifier"))
+	})
+
 	optionsWrapper := func(w http.ResponseWriter, r *http.Request) {
 		c.Logger.Debug(r.Method, r.URL.Path)
 		if r.Method == "OPTIONS" {
@@ -254,6 +278,49 @@ func (c *Client) wakeListeners() {
 	for _, ch := range c.listeners {
 		ch <- true
 	}
+}
+
+func (c *Client) addController(clientID, deviceName string) {
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
+	// Existing controller ... reset its timer.
+	for _, cntrllr := range c.controllers {
+		if cntrllr.clientID == clientID {
+			c.Logger.Debugf("resetting timer for controller %s [%s]", deviceName, clientID)
+			updateControllerTimer(c, cntrllr)
+			return
+		}
+	}
+	// New controller ... add to list.
+	c.Logger.Debugf("adding controller %s [%s]", deviceName, clientID)
+	cntrllr := &controller{clientID: clientID, deviceName: deviceName}
+	updateControllerTimer(c, cntrllr)
+	c.controllers = append(c.controllers, cntrllr)
+}
+
+func (c *Client) removeController(clientID string) {
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
+	controllers := []*controller{}
+	for _, cntrllr := range c.controllers {
+		if cntrllr.clientID == clientID {
+			c.Logger.Debugf("removing controller %s [%s]", cntrllr.deviceName, cntrllr.clientID)
+			cntrllr.timer.Stop()
+		} else {
+			controllers = append(controllers, cntrllr)
+		}
+	}
+	c.controllers = controllers
+}
+
+func updateControllerTimer(c *Client, cntrllr *controller) {
+	if cntrllr.timer != nil {
+		cntrllr.timer.Reset(controllerTimeout)
+		return
+	}
+	cntrllr.timer = time.AfterFunc(controllerTimeout, func() {
+		c.removeController(cntrllr.clientID)
+	})
 }
 
 func startClientDiscovery(c *Client) error {
