@@ -33,6 +33,7 @@ type PlayerCommand struct {
 type controller struct {
 	clientID   string
 	deviceName string
+	url        string
 	timer      *time.Timer
 }
 
@@ -213,7 +214,13 @@ func startClientAPI(c *Client) error {
 	})
 
 	api.HandleFunc("/player/timeline/subscribe", func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		c.addController(
+			fmt.Sprintf("%s://%s:%s/", r.FormValue("protocol"), host, r.FormValue("port")),
 			r.Header.Get("X-Plex-Client-Identifier"),
 			r.Header.Get("X-Plex-Device-Name"),
 		)
@@ -280,7 +287,7 @@ func (c *Client) wakeListeners() {
 	}
 }
 
-func (c *Client) addController(clientID, deviceName string) {
+func (c *Client) addController(url, clientID, deviceName string) {
 	c.controllersLock.Lock()
 	defer c.controllersLock.Unlock()
 	// Existing controller ... reset its timer.
@@ -293,7 +300,7 @@ func (c *Client) addController(clientID, deviceName string) {
 	}
 	// New controller ... add to list.
 	c.Logger.Debugf("adding controller %s [%s]", deviceName, clientID)
-	cntrllr := &controller{clientID: clientID, deviceName: deviceName}
+	cntrllr := &controller{clientID: clientID, deviceName: deviceName, url: url}
 	updateControllerTimer(c, cntrllr)
 	c.controllers = append(c.controllers, cntrllr)
 }
