@@ -300,7 +300,7 @@ func (c *Client) addController(url, clientID, deviceName string) {
 		}
 	}
 	// New controller ... add to list.
-	c.Logger.Debugf("adding controller %s [%s]", deviceName, clientID)
+	c.Logger.Infof("adding controller %s [%s]", deviceName, clientID)
 	cntrllr := &controller{clientID: clientID, deviceName: deviceName, url: url}
 	updateControllerTimer(c, cntrllr)
 	c.controllers = append(c.controllers, cntrllr)
@@ -312,7 +312,7 @@ func (c *Client) removeController(clientID string) {
 	controllers := []*controller{}
 	for _, cntrllr := range c.controllers {
 		if cntrllr.clientID == clientID {
-			c.Logger.Debugf("removing controller %s [%s]", cntrllr.deviceName, cntrllr.clientID)
+			c.Logger.Infof("removing controller %s [%s]", cntrllr.deviceName, cntrllr.clientID)
 			cntrllr.timer.Stop()
 		} else {
 			controllers = append(controllers, cntrllr)
