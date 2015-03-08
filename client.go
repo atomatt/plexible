@@ -58,7 +58,7 @@ type Client struct {
 	// Player timeline
 	timeline      Timeline
 	timelineLock  sync.Mutex
-	listeners     []chan bool
+	listeners     []chan struct{}
 	listenersLock sync.Mutex
 
 	// Controllers
@@ -175,7 +175,7 @@ func startClientAPI(c *Client) error {
 		// Block until there's a timeline update or the timeout expires.
 		if wait {
 			c.Logger.Debugf("waiting for timeline update")
-			ch := make(chan bool)
+			ch := make(chan struct{})
 			c.addListener(ch)
 			defer c.removeListener(ch)
 			select {
@@ -266,13 +266,13 @@ func startClientAPI(c *Client) error {
 	return nil
 }
 
-func (c *Client) addListener(ch chan bool) {
+func (c *Client) addListener(ch chan struct{}) {
 	c.listenersLock.Lock()
 	defer c.listenersLock.Unlock()
 	c.listeners = append(c.listeners, ch)
 }
 
-func (c *Client) removeListener(ch chan bool) {
+func (c *Client) removeListener(ch chan struct{}) {
 	c.listenersLock.Lock()
 	defer c.listenersLock.Unlock()
 	for i, l := range c.listeners {
@@ -287,7 +287,7 @@ func (c *Client) wakeListeners() {
 	c.listenersLock.Lock()
 	defer c.listenersLock.Unlock()
 	for _, ch := range c.listeners {
-		ch <- true
+		close(ch)
 	}
 }
 
