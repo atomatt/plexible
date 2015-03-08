@@ -275,13 +275,12 @@ func (c *Client) addListener(ch chan bool) {
 func (c *Client) removeListener(ch chan bool) {
 	c.listenersLock.Lock()
 	defer c.listenersLock.Unlock()
-	var ls []chan bool
-	for _, l := range c.listeners {
-		if l != ch {
-			ls = append(ls, l)
+	for i, l := range c.listeners {
+		if l == ch {
+			c.listeners = append(c.listeners[:i], c.listeners[i+1:]...)
+			break
 		}
 	}
-	c.listeners = ls
 }
 
 func (c *Client) wakeListeners() {
@@ -314,16 +313,14 @@ func (c *Client) addController(url, clientID, deviceName string) *controller {
 func (c *Client) removeController(clientID string) {
 	c.controllersLock.Lock()
 	defer c.controllersLock.Unlock()
-	controllers := []*controller{}
-	for _, cntrllr := range c.controllers {
+	for i, cntrllr := range c.controllers {
 		if cntrllr.clientID == clientID {
 			c.Logger.Infof("removing controller %s [%s]", cntrllr.deviceName, cntrllr.clientID)
+			c.controllers = append(c.controllers[:i], c.controllers[i+1:]...)
 			cntrllr.timer.Stop()
-		} else {
-			controllers = append(controllers, cntrllr)
+			break
 		}
 	}
-	c.controllers = controllers
 }
 
 func updateControllerTimer(c *Client, cntrllr *controller) {
