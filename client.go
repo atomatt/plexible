@@ -83,6 +83,28 @@ func (c *subscribingController) Send(clientID string, mc *MediaContainer) error 
 	return nil
 }
 
+// A polling controller, e.g. the standard web client, uses long polling to get
+// rapid timeline updates. The client's request handler is expected to block
+// until there's an update and sends the new timeline as the response body.
+type pollingController struct {
+	clientID string
+	ch       chan *MediaContainer
+}
+
+func (c *pollingController) String() string {
+	return c.clientID
+}
+
+func (c *pollingController) ClientID() string {
+	return c.clientID
+}
+
+func (c *pollingController) Send(clientID string, mc *MediaContainer) error {
+	c.ch <- mc
+	close(c.ch)
+	return nil
+}
+
 type Client struct {
 
 	// Client details
@@ -102,10 +124,8 @@ type Client struct {
 	player Player
 
 	// Player timeline
-	timeline      Timeline
-	timelineLock  sync.Mutex
-	listeners     []chan struct{}
-	listenersLock sync.Mutex
+	timeline     Timeline
+	timelineLock sync.Mutex
 
 	// Controllers
 	registeredControllers     []*registeredController
@@ -144,6 +164,7 @@ func (c *Client) AddPlayer(p Player) {
 				return
 			}
 			c.updateTimeline(p, t)
+			c.notifyControllers()
 		}
 	}()
 }
@@ -153,8 +174,6 @@ func (c *Client) updateTimeline(p Player, t Timeline) {
 	defer c.timelineLock.Unlock()
 	c.Logger.Debugf("timeline %v from player %v", t, p)
 	c.timeline = t
-	c.wakeListeners()
-	c.notifyControllers()
 }
 
 func (c *Client) Start() error {
@@ -215,29 +234,27 @@ func startClientAPI(c *Client) error {
 
 	api.HandleFunc("/player/timeline/poll", func(w http.ResponseWriter, r *http.Request) {
 
+		clientID := r.Header.Get("X-Plex-Target-Client-Identifier")
 		commandID := r.FormValue("commandID")
 		wait := r.FormValue("wait") == "1"
+
+		var mc *MediaContainer
 
 		// Block until there's a timeline update or the timeout expires.
 		if wait {
 			c.Logger.Debugf("waiting for timeline update")
-			ch := make(chan struct{})
-			c.addListener(ch)
-			defer c.removeListener(ch)
+			ch := make(chan *MediaContainer)
+			c.registerPollingController(clientID, ch)
+			defer c.forgetController(clientID)
 			select {
-			case <-ch:
+			case mc = <-ch:
 			case <-time.After(time.Second * 30):
 			}
 		}
 
-		c.timelineLock.Lock()
-		defer c.timelineLock.Unlock()
-
-		// TODO: track/cache player timelines and just send
-		mc := MediaContainer{
-			CommandID:         commandID,
-			MachineIdentifier: c.ID,
-			Timelines:         []Timeline{c.timeline},
+		if mc == nil {
+			t := c.collectTimelines()
+			mc = makeTimeline(c.ID, commandID, t)
 		}
 
 		msg, _ := xml.Marshal(mc)
@@ -270,7 +287,7 @@ func startClientAPI(c *Client) error {
 			r.Header.Get("X-Plex-Client-Identifier"),
 			fmt.Sprintf("%s://%s:%s/", r.FormValue("protocol"), host, r.FormValue("port")),
 		)
-		c.SendTimeline(rc)
+		c.SendTimeline(rc, c.collectTimelines())
 	})
 
 	api.HandleFunc("/player/timeline/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
@@ -308,29 +325,10 @@ func startClientAPI(c *Client) error {
 	return nil
 }
 
-func (c *Client) addListener(ch chan struct{}) {
-	c.listenersLock.Lock()
-	defer c.listenersLock.Unlock()
-	c.listeners = append(c.listeners, ch)
-}
-
-func (c *Client) removeListener(ch chan struct{}) {
-	c.listenersLock.Lock()
-	defer c.listenersLock.Unlock()
-	for i, l := range c.listeners {
-		if l == ch {
-			c.listeners = append(c.listeners[:i], c.listeners[i+1:]...)
-			break
-		}
-	}
-}
-
-func (c *Client) wakeListeners() {
-	c.listenersLock.Lock()
-	defer c.listenersLock.Unlock()
-	for _, ch := range c.listeners {
-		close(ch)
-	}
+func (c *Client) collectTimelines() []Timeline {
+	c.timelineLock.Lock()
+	defer c.timelineLock.Unlock()
+	return []Timeline{c.timeline}
 }
 
 func (c *Client) registerSubscribingController(clientID, url string) *registeredController {
@@ -358,6 +356,18 @@ func (c *Client) registerSubscribingController(clientID, url string) *registered
 	return rc
 }
 
+func (c *Client) registerPollingController(clientID string, ch chan *MediaContainer) *registeredController {
+	c.registeredControllersLock.Lock()
+	defer c.registeredControllersLock.Unlock()
+	c.Logger.Infof("adding polling controller %s", clientID)
+	rc := &registeredController{
+		&pollingController{clientID: clientID, ch: ch},
+		nil,
+	}
+	c.registeredControllers = append(c.registeredControllers, rc)
+	return rc
+}
+
 func (c *Client) forgetController(clientID string) {
 	c.registeredControllersLock.Lock()
 	defer c.registeredControllersLock.Unlock()
@@ -365,7 +375,9 @@ func (c *Client) forgetController(clientID string) {
 		if rc.controller.ClientID() == clientID {
 			c.Logger.Infof("forgetting controller %s", clientID)
 			c.registeredControllers = append(c.registeredControllers[:i], c.registeredControllers[i+1:]...)
-			rc.timeout.Stop()
+			if rc.timeout != nil {
+				rc.timeout.Stop()
+			}
 			break
 		}
 	}
@@ -374,25 +386,28 @@ func (c *Client) forgetController(clientID string) {
 func (c *Client) notifyControllers() {
 	c.registeredControllersLock.Lock()
 	defer c.registeredControllersLock.Unlock()
+	t := c.collectTimelines()
 	for _, rc := range c.registeredControllers {
-		c.SendTimeline(rc)
+		c.SendTimeline(rc, t)
 	}
 }
 
-func (c *Client) SendTimeline(rc *registeredController) error {
+func (c *Client) SendTimeline(rc *registeredController, t []Timeline) error {
 	c.Logger.Debugf("sending timeline to %s", rc.controller.String())
-	err := rc.controller.Send(
-		c.ID,
-		&MediaContainer{
-			MachineIdentifier: c.ID,
-			Timelines:         []Timeline{c.timeline},
-		},
-	)
+	err := rc.controller.Send(c.ID, makeTimeline(c.ID, "", t))
 	if err != nil {
 		c.Logger.Errorf("error sending timeline to controller %s: %s",
 			rc.controller.ClientID(), err)
 	}
 	return err
+}
+
+func makeTimeline(clientID, commandID string, timeline []Timeline) *MediaContainer {
+	return &MediaContainer{
+		MachineIdentifier: clientID,
+		CommandID:         commandID,
+		Timelines:         timeline,
+	}
 }
 
 func startClientDiscovery(c *Client) error {
