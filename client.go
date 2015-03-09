@@ -19,26 +19,37 @@ import (
 // Time after which a subscribed controller is removed.
 const controllerTimeout = time.Second * 90
 
+// A player is registered with the client and handles playback and control of a
+// specific type of media.
 type Player interface {
+	// Returns a list of the player's capabilities.
 	Capabilities() []string
+	// Returns a channel where the client will send commands it receives from a
+	// controller.
 	CommandChan() chan PlayerCommand
+	// Returns a channel through which the client will receive timeline updates
+	// from the player.
 	Subscribe() chan Timeline
 }
 
+// A player command is sent to a player when the client receives a command from
+// a controller.
 type PlayerCommand struct {
-	Type   string
+	// Command type.
+	Type string
+	// Command params.
 	Params url.Values
 }
 
-// A controller is a device that is controlling this client. It is either
-// polling (typically a web client) or subscribing (other types of client).
+// A controller is a device that controls the client. It is either polling
+// (typically a web client) or subscribing (other types of client).
 type controller interface {
 	fmt.Stringer
 	ClientID() string
 	Send(clientID string, mc *MediaContainer) error
 }
 
-// A registeredController tracks an attached controller's state.
+// A registeredController tracks an attached controller and its state.
 type registeredController struct {
 	controller controller
 	timeout    *time.Timer
@@ -105,6 +116,8 @@ func (c *pollingController) Send(clientID string, mc *MediaContainer) error {
 	return nil
 }
 
+// Client implements the core of a Plex client device. It handles discovery,
+// controller subscriptions, player state tracking, etc.
 type Client struct {
 
 	// Client details
