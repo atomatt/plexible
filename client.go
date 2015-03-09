@@ -30,11 +30,57 @@ type PlayerCommand struct {
 	Params url.Values
 }
 
-type controller struct {
-	clientID   string
-	deviceName string
-	url        string
-	timer      *time.Timer
+// A controller is a device that is controlling this client. It is either
+// polling (typically a web client) or subscribing (other types of client).
+type controller interface {
+	fmt.Stringer
+	ClientID() string
+	Send(clientID string, mc *MediaContainer) error
+}
+
+// A registeredController tracks an attached controller's state.
+type registeredController struct {
+	controller controller
+	timeout    *time.Timer
+}
+
+// A subscribingController is a device that explicitly subscribes to and
+// unsubscribes from this client. Timeline updates and posted to the
+// controller's HTTP API.
+type subscribingController struct {
+	clientID string
+	url      string
+}
+
+func (c *subscribingController) ClientID() string {
+	return c.clientID
+}
+
+func (c *subscribingController) String() string {
+	return fmt.Sprintf("%s at %s", c.clientID, c.url)
+}
+
+func (c *subscribingController) Send(clientID string, mc *MediaContainer) error {
+
+	buf, err := xml.Marshal(mc)
+	if err != nil {
+		return fmt.Errorf("error encoding xml: %s", err)
+	}
+
+	req, err := http.NewRequest("POST", c.url+":/timeline", bytes.NewReader(buf))
+	if err != nil {
+		return fmt.Errorf("error creating request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/xml")
+	req.Header.Set("X-Plex-Client-Identifier", clientID)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("error performing request: %s", err)
+	}
+	defer resp.Body.Close()
+
+	return nil
 }
 
 type Client struct {
@@ -62,8 +108,8 @@ type Client struct {
 	listenersLock sync.Mutex
 
 	// Controllers
-	controllers     []*controller
-	controllersLock sync.Mutex
+	registeredControllers     []*registeredController
+	registeredControllersLock sync.Mutex
 
 	// Discovery
 	discoveryConn *net.UDPConn
@@ -220,19 +266,15 @@ func startClientAPI(c *Client) error {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		cntrllr := c.addController(
-			fmt.Sprintf("%s://%s:%s/", r.FormValue("protocol"), host, r.FormValue("port")),
+		rc := c.registerSubscribingController(
 			r.Header.Get("X-Plex-Client-Identifier"),
-			r.Header.Get("X-Plex-Device-Name"),
+			fmt.Sprintf("%s://%s:%s/", r.FormValue("protocol"), host, r.FormValue("port")),
 		)
-		if err := c.notifyController(cntrllr); err != nil {
-			c.Logger.Errorf("error sending timeline to %s [%s]: %s",
-				cntrllr.deviceName, cntrllr.clientID, err)
-		}
+		c.SendTimeline(rc)
 	})
 
 	api.HandleFunc("/player/timeline/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
-		c.removeController(r.Header.Get("X-Plex-Client-Identifier"))
+		c.forgetController(r.Header.Get("X-Plex-Client-Identifier"))
 	})
 
 	optionsWrapper := func(w http.ResponseWriter, r *http.Request) {
@@ -291,90 +333,66 @@ func (c *Client) wakeListeners() {
 	}
 }
 
-func (c *Client) addController(url, clientID, deviceName string) *controller {
-	c.controllersLock.Lock()
-	defer c.controllersLock.Unlock()
-	// Existing controller ... reset its timer.
-	for _, cntrllr := range c.controllers {
-		if cntrllr.clientID == clientID {
-			c.Logger.Debugf("resetting timer for controller %s [%s]", deviceName, clientID)
-			updateControllerTimer(c, cntrllr)
-			return cntrllr
+func (c *Client) registerSubscribingController(clientID, url string) *registeredController {
+	c.registeredControllersLock.Lock()
+	defer c.registeredControllersLock.Unlock()
+
+	// Existing controller ... reset its timeout.
+	for _, rc := range c.registeredControllers {
+		if rc.controller.ClientID() == clientID {
+			c.Logger.Debugf("resetting timeout for subscribing controller %s", clientID)
+			rc.timeout.Reset(controllerTimeout)
+			return rc
 		}
 	}
+
 	// New controller ... add to list.
-	c.Logger.Infof("adding controller %s [%s]", deviceName, clientID)
-	cntrllr := &controller{clientID: clientID, deviceName: deviceName, url: url}
-	updateControllerTimer(c, cntrllr)
-	c.controllers = append(c.controllers, cntrllr)
-	return cntrllr
+	c.Logger.Infof("adding subscribing controller %s", clientID)
+	rc := &registeredController{
+		&subscribingController{clientID: clientID, url: url},
+		time.AfterFunc(controllerTimeout, func() {
+			c.forgetController(clientID)
+		}),
+	}
+	c.registeredControllers = append(c.registeredControllers, rc)
+	return rc
 }
 
-func (c *Client) removeController(clientID string) {
-	c.controllersLock.Lock()
-	defer c.controllersLock.Unlock()
-	for i, cntrllr := range c.controllers {
-		if cntrllr.clientID == clientID {
-			c.Logger.Infof("removing controller %s [%s]", cntrllr.deviceName, cntrllr.clientID)
-			c.controllers = append(c.controllers[:i], c.controllers[i+1:]...)
-			cntrllr.timer.Stop()
+func (c *Client) forgetController(clientID string) {
+	c.registeredControllersLock.Lock()
+	defer c.registeredControllersLock.Unlock()
+	for i, rc := range c.registeredControllers {
+		if rc.controller.ClientID() == clientID {
+			c.Logger.Infof("forgetting controller %s", clientID)
+			c.registeredControllers = append(c.registeredControllers[:i], c.registeredControllers[i+1:]...)
+			rc.timeout.Stop()
 			break
 		}
 	}
 }
 
-func updateControllerTimer(c *Client, cntrllr *controller) {
-	if cntrllr.timer != nil {
-		cntrllr.timer.Reset(controllerTimeout)
-		return
-	}
-	cntrllr.timer = time.AfterFunc(controllerTimeout, func() {
-		c.removeController(cntrllr.clientID)
-	})
-}
-
 func (c *Client) notifyControllers() {
-	c.controllersLock.Lock()
-	defer c.controllersLock.Unlock()
-	for _, cntrllr := range c.controllers {
-		if err := c.notifyController(cntrllr); err != nil {
-			c.Logger.Errorf("error sending timeline to controller %s [%s]: %s",
-				cntrllr.deviceName, cntrllr.clientID, err)
-		}
+	c.registeredControllersLock.Lock()
+	defer c.registeredControllersLock.Unlock()
+	for _, rc := range c.registeredControllers {
+		c.SendTimeline(rc)
 	}
 }
 
-func (c *Client) notifyController(cntrllr *controller) error {
-
-	c.Logger.Debugf("sending timeline to controller %s [%s]",
-		cntrllr.deviceName, cntrllr.clientID)
-
-	mc := MediaContainer{
-		MachineIdentifier: c.ID,
-		Timelines:         []Timeline{c.timeline},
-	}
-	buf, err := xml.Marshal(mc)
+func (c *Client) SendTimeline(rc *registeredController) error {
+	c.Logger.Debugf("sending timeline to %s", rc.controller.String())
+	err := rc.controller.Send(
+		c.ID,
+		&MediaContainer{
+			MachineIdentifier: c.ID,
+			Timelines:         []Timeline{c.timeline},
+		},
+	)
 	if err != nil {
-		return fmt.Errorf("error encoding controller timeline xml: %s", err)
+		c.Logger.Errorf("error sending timeline to controller %s: %s",
+			rc.controller.ClientID(), err)
 	}
-
-	req, err := http.NewRequest("POST", cntrllr.url+":/timeline", bytes.NewReader(buf))
-	if err != nil {
-		return fmt.Errorf("error creating request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/xml")
-	req.Header.Set("X-Plex-Client-Identifier", c.ID)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error performing request: %s", err)
-	}
-	defer resp.Body.Close()
-
-	c.Logger.Debugf("timeline post to %s [%s] returned %s",
-		cntrllr.deviceName, cntrllr.clientID, resp.Status)
-
-	return nil
+	return err
 }
 
 func startClientDiscovery(c *Client) error {
