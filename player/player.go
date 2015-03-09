@@ -34,7 +34,7 @@ func main() {
 	)
 
 	player := NewPlayer(logger)
-	client.AddPlayer(player)
+	client.AddPlayer("music", player)
 
 	if err := client.Start(); err != nil {
 		logger.Fatalf("error starting client: %s", err)

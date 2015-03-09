@@ -41,6 +41,13 @@ type PlayerCommand struct {
 	Params url.Values
 }
 
+// A playerInfo tracks a registered player and its state.
+type playerInfo struct {
+	Player   Player
+	Type     string
+	Timeline Timeline
+}
+
 // A controller is a device that controls the client. It is either polling
 // (typically a web client) or subscribing (other types of client).
 type controller interface {
@@ -134,11 +141,8 @@ type Client struct {
 	apiPort     int
 
 	// Player
-	player Player
-
-	// Player timeline
-	timeline     Timeline
-	timelineLock sync.Mutex
+	players     []*playerInfo
+	playersLock sync.Mutex
 
 	// Controllers
 	registeredControllers     []*registeredController
@@ -165,33 +169,41 @@ func NewClient(id, name, product, version string, logger *logrus.Logger) *Client
 	}
 }
 
-func (c *Client) AddPlayer(p Player) {
-	c.player = p
-	ch := p.Subscribe()
+func (c *Client) AddPlayer(playerType string, player Player) {
+	c.playersLock.Lock()
+	defer c.playersLock.Unlock()
+	pi := &playerInfo{Type: playerType, Player: player}
+	c.players = append(c.players, pi)
+	ch := player.Subscribe()
 	go func() {
-		c.Logger.Debugf("player %v timeline subscription started", p)
-		defer c.Logger.Errorf("player %v timeline subscription ended", p)
+		c.Logger.Debugf("player %v timeline subscription started", player)
+		defer c.Logger.Errorf("player %v timeline subscription ended", player)
 		for {
 			t, ok := <-ch
 			if !ok {
 				return
 			}
-			c.updateTimeline(p, t)
+			c.updateTimeline(player, t)
 			c.notifyControllers()
 		}
 	}()
 }
 
 func (c *Client) updateTimeline(p Player, t Timeline) {
-	c.timelineLock.Lock()
-	defer c.timelineLock.Unlock()
+	c.playersLock.Lock()
+	defer c.playersLock.Unlock()
 	c.Logger.Debugf("timeline %v from player %v", t, p)
-	c.timeline = t
+	for _, pi := range c.players {
+		if pi.Player == p {
+			pi.Timeline = t
+			break
+		}
+	}
 }
 
 func (c *Client) Start() error {
 
-	if c.player == nil {
+	if c.players == nil {
 		return errors.New("cannot start: no players added")
 	}
 
@@ -228,16 +240,17 @@ func startClientAPI(c *Client) error {
 	api := http.NewServeMux()
 
 	api.HandleFunc("/resources", func(w http.ResponseWriter, r *http.Request) {
-		players := []player{
-			{
+		players := make([]player, len(c.players))
+		for _, pi := range c.players {
+			players = append(players, player{
 				Title:                c.Name,
 				MachineIdentifier:    c.ID,
 				Product:              c.Product,
 				Version:              c.Version,
 				ProtocolVersion:      "1",
-				ProtocolCapabilities: strings.Join(c.player.Capabilities(), ","),
+				ProtocolCapabilities: strings.Join(pi.Player.Capabilities(), ","),
 				DeviceClass:          "htpc",
-			},
+			})
 		}
 		msg, _ := xml.Marshal(MediaContainer{Players: players})
 		c.Logger.Debugf("sending resources response: %q", msg)
@@ -285,9 +298,10 @@ func startClientAPI(c *Client) error {
 		// Parse form and URL.
 		cmdType := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		r.ParseForm()
-		// Send command to player.
-		c.player.CommandChan() <- PlayerCommand{Type: cmdType, Params: r.Form}
-		w.WriteHeader(200)
+		// Send command to player for type.
+		if pi := c.playerForType(r.FormValue("type")); pi != nil {
+			pi.Player.CommandChan() <- PlayerCommand{Type: cmdType, Params: r.Form}
+		}
 	})
 
 	api.HandleFunc("/player/timeline/subscribe", func(w http.ResponseWriter, r *http.Request) {
@@ -338,10 +352,25 @@ func startClientAPI(c *Client) error {
 	return nil
 }
 
+func (c *Client) playerForType(t string) *playerInfo {
+	c.playersLock.Lock()
+	defer c.playersLock.Unlock()
+	for _, pi := range c.players {
+		if pi.Type == t {
+			return pi
+		}
+	}
+	return nil
+}
+
 func (c *Client) collectTimelines() []Timeline {
-	c.timelineLock.Lock()
-	defer c.timelineLock.Unlock()
-	return []Timeline{c.timeline}
+	c.playersLock.Lock()
+	defer c.playersLock.Unlock()
+	t := make([]Timeline, len(c.players))
+	for _, pi := range c.players {
+		t = append(t, pi.Timeline)
+	}
+	return t
 }
 
 func (c *Client) registerSubscribingController(clientID, url string) *registeredController {
