@@ -564,8 +564,6 @@ func clientMsg(header string, c *Client) []byte {
 
 /*
 TODO:
-	* get resources info from player(s)
 	* proper XML handling, everywhere
-	* multiple typed players?
 	* create/reuse xml encoder for connection
 */
