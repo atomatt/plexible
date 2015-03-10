@@ -260,7 +260,7 @@ func startClientAPI(c *Client) error {
 
 	api.HandleFunc("/player/timeline/poll", func(w http.ResponseWriter, r *http.Request) {
 
-		clientID := r.Header.Get("X-Plex-Target-Client-Identifier")
+		controllerID := r.Header.Get("X-Plex-Client-Identifier")
 		commandID := r.FormValue("commandID")
 		wait := r.FormValue("wait") == "1"
 
@@ -270,8 +270,8 @@ func startClientAPI(c *Client) error {
 		if wait {
 			c.Logger.Debugf("waiting for timeline update")
 			ch := make(chan *MediaContainer)
-			c.registerPollingController(clientID, ch)
-			defer c.forgetController(clientID)
+			rc := c.registerPollingController(controllerID, ch, commandID)
+			defer c.forgetController(controllerID)
 			select {
 			case mc = <-ch:
 			case <-time.After(time.Second * 30):
@@ -295,7 +295,7 @@ func startClientAPI(c *Client) error {
 	})
 
 	api.HandleFunc("/player/playback/", func(w http.ResponseWriter, r *http.Request) {
-		// Parse form and URL.
+		controllerID := r.Header.Get("X-Plex-Client-Identifier")
 		cmdType := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		r.ParseForm()
 		// Send command to player for type.
@@ -310,15 +310,19 @@ func startClientAPI(c *Client) error {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		controllerID := r.Header.Get("X-Plex-Client-Identifier")
+		commandID := r.FormValue("commandID")
 		rc := c.registerSubscribingController(
-			r.Header.Get("X-Plex-Client-Identifier"),
+			controllerID,
 			fmt.Sprintf("%s://%s:%s/", r.FormValue("protocol"), host, r.FormValue("port")),
+			commandID,
 		)
 		c.SendTimeline(rc, c.collectTimelines())
 	})
 
 	api.HandleFunc("/player/timeline/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
-		c.forgetController(r.Header.Get("X-Plex-Client-Identifier"))
+		controllerID := r.Header.Get("X-Plex-Client-Identifier")
+		c.forgetController(controllerID)
 	})
 
 	optionsWrapper := func(w http.ResponseWriter, r *http.Request) {
