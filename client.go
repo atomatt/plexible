@@ -60,6 +60,7 @@ type controller interface {
 type registeredController struct {
 	controller controller
 	timeout    *time.Timer
+	commandID  string
 }
 
 // A subscribingController is a device that explicitly subscribes to and
@@ -274,6 +275,7 @@ func startClientAPI(c *Client) error {
 			defer c.forgetController(controllerID)
 			select {
 			case mc = <-ch:
+				commandID = rc.commandID
 			case <-time.After(time.Second * 30):
 			}
 		}
@@ -298,6 +300,8 @@ func startClientAPI(c *Client) error {
 		controllerID := r.Header.Get("X-Plex-Client-Identifier")
 		cmdType := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		r.ParseForm()
+		// Record controller's command ID.
+		c.updateControllerCommandID(controllerID, r.FormValue("commandID"))
 		// Send command to player for type.
 		if pi := c.playerForType(r.FormValue("type")); pi != nil {
 			pi.Player.CommandChan() <- PlayerCommand{Type: cmdType, Params: r.Form}
@@ -356,6 +360,17 @@ func startClientAPI(c *Client) error {
 	return nil
 }
 
+func (c *Client) updateControllerCommandID(clientID, commandID string) {
+	c.registeredControllersLock.Lock()
+	defer c.registeredControllersLock.Unlock()
+	for _, rc := range c.registeredControllers {
+		if rc.controller.ClientID() == clientID {
+			rc.commandID = commandID
+			break
+		}
+	}
+}
+
 func (c *Client) playerForType(t string) *playerInfo {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
@@ -377,15 +392,16 @@ func (c *Client) collectTimelines() []Timeline {
 	return t
 }
 
-func (c *Client) registerSubscribingController(clientID, url string) *registeredController {
+func (c *Client) registerSubscribingController(clientID, url, commandID string) *registeredController {
 	c.registeredControllersLock.Lock()
 	defer c.registeredControllersLock.Unlock()
 
-	// Existing controller ... reset its timeout.
+	// Existing controller ... reset its timeout and update command ID.
 	for _, rc := range c.registeredControllers {
 		if rc.controller.ClientID() == clientID {
 			c.Logger.Debugf("resetting timeout for subscribing controller %s", clientID)
 			rc.timeout.Reset(controllerTimeout)
+			rc.commandID = commandID
 			return rc
 		}
 	}
@@ -397,18 +413,19 @@ func (c *Client) registerSubscribingController(clientID, url string) *registered
 		time.AfterFunc(controllerTimeout, func() {
 			c.forgetController(clientID)
 		}),
+		commandID,
 	}
 	c.registeredControllers = append(c.registeredControllers, rc)
 	return rc
 }
 
-func (c *Client) registerPollingController(clientID string, ch chan *MediaContainer) *registeredController {
+func (c *Client) registerPollingController(clientID string, ch chan *MediaContainer, commandID string) *registeredController {
 	c.registeredControllersLock.Lock()
 	defer c.registeredControllersLock.Unlock()
 	c.Logger.Infof("adding polling controller %s", clientID)
 	rc := &registeredController{
-		&pollingController{clientID: clientID, ch: ch},
-		nil,
+		controller: &pollingController{clientID: clientID, ch: ch},
+		commandID:  commandID,
 	}
 	c.registeredControllers = append(c.registeredControllers, rc)
 	return rc
@@ -440,7 +457,7 @@ func (c *Client) notifyControllers() {
 
 func (c *Client) SendTimeline(rc *registeredController, t []Timeline) error {
 	c.Logger.Debugf("sending timeline to %s", rc.controller.String())
-	err := rc.controller.Send(c.ID, makeTimeline(c.ID, "", t))
+	err := rc.controller.Send(c.ID, makeTimeline(c.ID, rc.commandID, t))
 	if err != nil {
 		c.Logger.Errorf("error sending timeline to controller %s: %s",
 			rc.controller.ClientID(), err)
