@@ -26,10 +26,12 @@ func main() {
 	logger.Level = logLevel
 
 	client := plexible.NewClient(
-		"862b2506-ba0a-11e4-b501-cf0a1568e6a3",
-		"sharkbait",
-		"GoPlex",
-		"0.0.1",
+		&plexible.ClientInfo{
+			"862b2506-ba0a-11e4-b501-cf0a1568e6a3",
+			"sharkbait",
+			"GoPlex",
+			"0.0.1",
+		},
 		logger,
 	)
 

@@ -19,7 +19,15 @@ import (
 // Time after which a subscribed controller is removed.
 const controllerTimeout = time.Second * 90
 
-// A player is registered with the client and handles playback and control of a
+// ClientInfo contains static information about the client.
+type ClientInfo struct {
+	ID      string
+	Name    string
+	Product string
+	Version string
+}
+
+// A Player is registered with the client and handles playback and control of a
 // specific type of media.
 type Player interface {
 	// Returns a list of the player's capabilities.
@@ -32,7 +40,7 @@ type Player interface {
 	Subscribe() chan Timeline
 }
 
-// A player command is sent to a player when the client receives a command from
+// A PlayerCommand is sent to a player when the client receives a command from
 // a controller.
 type PlayerCommand struct {
 	// Command type.
@@ -129,10 +137,7 @@ func (c *pollingController) Send(clientID string, mc *MediaContainer) error {
 type Client struct {
 
 	// Client details
-	ID      string
-	Name    string
-	Product string
-	Version string
+	Info *ClientInfo
 
 	// Logger, uses the logrus StandardLogger() by default.
 	Logger *logrus.Logger
@@ -150,21 +155,18 @@ type Client struct {
 	registeredControllersLock sync.Mutex
 
 	// Discovery
-	discoveryConn *net.UDPConn
+	discovery *ClientDiscovery
 
 	// Service cleanup channel
 	shutdown chan bool
 }
 
-func NewClient(id, name, product, version string, logger *logrus.Logger) *Client {
+func NewClient(info *ClientInfo, logger *logrus.Logger) *Client {
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
 	return &Client{
-		ID:       id,
-		Name:     name,
-		Product:  product,
-		Version:  version,
+		Info:     info,
 		Logger:   logger,
 		shutdown: make(chan bool),
 	}
@@ -213,24 +215,17 @@ func (c *Client) Start() error {
 	if err != nil {
 		return fmt.Errorf("error starting api (%s)", err)
 	}
-	err = startClientDiscovery(c)
+	c.discovery = NewClientDiscovery(c.Info, c.apiPort, c.Logger)
+	err = c.discovery.Start()
 	if err != nil {
-		return fmt.Errorf("error starting discovery (%s)", err)
-	}
-
-	// Say hello.
-	err = hello(c)
-	if err != nil {
-		return fmt.Errorf("error saying hello (%s)", err)
+		return fmt.Errorf("error starting client discovery (%s)", err)
 	}
 
 	return nil
 }
 
 func (c *Client) Stop() error {
-	bye(c)
-	c.discoveryConn.Close()
-	<-c.shutdown
+	c.discovery.Stop()
 	c.apiListener.Close()
 	<-c.shutdown
 	return nil
@@ -244,10 +239,10 @@ func startClientAPI(c *Client) error {
 		players := make([]player, len(c.players))
 		for _, pi := range c.players {
 			players = append(players, player{
-				Title:                c.Name,
-				MachineIdentifier:    c.ID,
-				Product:              c.Product,
-				Version:              c.Version,
+				Title:                c.Info.Name,
+				MachineIdentifier:    c.Info.ID,
+				Product:              c.Info.Product,
+				Version:              c.Info.Version,
 				ProtocolVersion:      "1",
 				ProtocolCapabilities: strings.Join(pi.Player.Capabilities(), ","),
 				DeviceClass:          "htpc",
@@ -282,7 +277,7 @@ func startClientAPI(c *Client) error {
 
 		if mc == nil {
 			t := c.collectTimelines()
-			mc = makeTimeline(c.ID, commandID, t)
+			mc = makeTimeline(c.Info.ID, commandID, t)
 		}
 
 		msg, _ := xml.Marshal(mc)
@@ -290,7 +285,7 @@ func startClientAPI(c *Client) error {
 
 		w.Header().Add("Access-Control-Allow-Origin", "*")
 		w.Header().Add("Access-Control-Expose-Headers", "X-Plex-Client-Identifier")
-		w.Header().Add("X-Plex-Client-Identifier", c.ID)
+		w.Header().Add("X-Plex-Client-Identifier", c.Info.ID)
 		w.Header().Add("X-Plex-Protocol", "1.0")
 		w.Header().Add("Content-Type", "text/xml; charset=utf-8")
 		w.Write(msg)
@@ -457,7 +452,7 @@ func (c *Client) notifyControllers() {
 
 func (c *Client) SendTimeline(rc *registeredController, t []Timeline) error {
 	c.Logger.Debugf("sending timeline to %s", rc.controller.String())
-	err := rc.controller.Send(c.ID, makeTimeline(c.ID, rc.commandID, t))
+	err := rc.controller.Send(c.Info.ID, makeTimeline(c.Info.ID, rc.commandID, t))
 	if err != nil {
 		c.Logger.Errorf("error sending timeline to controller %s: %s",
 			rc.controller.ClientID(), err)
@@ -471,95 +466,6 @@ func makeTimeline(clientID, commandID string, timeline []Timeline) *MediaContain
 		CommandID:         commandID,
 		Timelines:         timeline,
 	}
-}
-
-func startClientDiscovery(c *Client) error {
-
-	c.Logger.Infof("listening for client discovery requests on port %d", clientDiscoveryPort)
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientDiscoveryPort,
-	})
-	if err != nil {
-		return fmt.Errorf("error creating discovery socket (%s)", err)
-	}
-	c.discoveryConn = conn
-
-	go func() {
-		defer func() {
-			c.Logger.Info("client discovery loop ending")
-			c.shutdown <- true
-		}()
-
-		c.Logger.Info("client discovery loop running")
-		for {
-			b := make([]byte, 1024)
-			_, addr, err := c.discoveryConn.ReadFrom(b)
-			if err != nil {
-				return
-			}
-
-			msg := clientMsg("HTTP/1.0 200 OK", c)
-			c.Logger.Debugf("client discovery request from %s", addr)
-			c.Logger.Debugf("sending client discovery response: %q", msg)
-			c.discoveryConn.WriteTo(msg, addr)
-		}
-	}()
-	return nil
-}
-
-func hello(c *Client) error {
-	c.Logger.Info("announcing player to network")
-	msg := clientMsg("HELLO * HTTP/1.0", c)
-	c.Logger.Debugf("HELLO: %q", msg)
-	_, err := c.discoveryConn.WriteTo(msg, &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientBroadcastPort,
-	})
-	if err != nil {
-		return fmt.Errorf("error sending HELLO (%s)", err)
-	}
-	return nil
-}
-
-func bye(c *Client) error {
-	c.Logger.Info("removing player from network")
-	msg := clientMsg("BYE * HTTP/1.0", c)
-	c.Logger.Debugf("BYE: %q", msg)
-	_, err := c.discoveryConn.WriteTo(msg, &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientBroadcastPort,
-	})
-	if err != nil {
-		return fmt.Errorf("error sending BYE (%s)", err)
-	}
-	return nil
-}
-
-func clientMsg(header string, c *Client) []byte {
-
-	params := map[string]string{
-		"Content-Type":          "plex/media-player",
-		"Name":                  c.Name,
-		"Port":                  strconv.Itoa(c.apiPort),
-		"Product":               c.Product,
-		"Protocol":              "plex",
-		"Protocol-Version":      "1",
-		"Protocol-Capabilities": "timeline,playback",
-		"Resource-Identifier":   c.ID,
-		"Version":               c.Version,
-	}
-
-	w := bytes.NewBuffer(nil)
-	w.WriteString(header)
-	for k, v := range params {
-		w.WriteString("\n")
-		w.WriteString(k)
-		w.WriteString(": ")
-		w.WriteString(v)
-	}
-
-	return w.Bytes()
 }
 
 /*
