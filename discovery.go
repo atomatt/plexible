@@ -9,117 +9,115 @@ import (
 	"github.com/Sirupsen/logrus"
 )
 
+var (
+	// StandardClientDiscoveryAddr is the standard UDP broadcast address used
+	// for Plex client discovery.
+	StandardClientDiscoveryAddr = net.UDPAddr{
+		IP:   net.ParseIP(discoveryIP),
+		Port: clientDiscoveryPort,
+	}
+	// StandardClientBroadcastAddr is the standard UDP broadcast address used
+	// for Plex client announcements.
+	StandardClientBroadcastAddr = net.UDPAddr{
+		IP:   net.ParseIP(discoveryIP),
+		Port: clientBroadcastPort,
+	}
+)
+
 // ClientDiscovery handles local network discovery on behalf of a client.
+//
+// The client should annouce its arrival and departure by calling Hello() and Bye(). It should also start a
 type ClientDiscovery struct {
 	Info   *ClientInfo
 	Port   int
 	Logger *logrus.Logger
-
-	conn    *net.UDPConn
-	stopped chan struct{}
 }
 
-// NewClientDiscovery allocates and returns a new ClientDiscovery.
-func NewClientDiscovery(info *ClientInfo, port int, logger *logrus.Logger) *ClientDiscovery {
-	return &ClientDiscovery{Info: info, Port: port, Logger: logger}
-}
-
-// Start announces the client on the network and listens for broadcast requests
-// from other devices that are interested in clients.
-func (d *ClientDiscovery) Start() error {
-
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientDiscoveryPort,
-	})
+// ListenAndServe creates a UDP connection to listen for discovery requests and
+// calls Serve(). If addr is nil, StandardClientDiscoveryAddr is used.
+func (d *ClientDiscovery) ListenAndServe(addr *net.UDPAddr) error {
+	if addr == nil {
+		addr = &StandardClientDiscoveryAddr
+	}
+	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return fmt.Errorf("error creating client discovery socket (%s)", err)
 	}
-	d.conn = conn
+	return d.Serve(conn)
+}
 
-	err = d.hello()
-	if err != nil {
-		return fmt.Errorf("error saying hello (%s)", err)
-	}
-
-	d.Logger.Infof("listening for client discovery requests on port %d", clientDiscoveryPort)
-	d.stopped = make(chan struct{})
-
-	go func() {
-		d.Logger.Info("client discovery loop running")
-		defer func() {
-			d.Logger.Info("client discovery loop ending")
-			close(d.stopped)
-		}()
-		for {
-			b := make([]byte, 1024)
-			_, addr, err := d.conn.ReadFrom(b)
-			if err != nil {
-				return
-			}
-
-			msg := message("HTTP/1.0 200 OK", d)
-			d.Logger.Debugf("client discovery request from %s", addr)
-			d.Logger.Debugf("sending client discovery response: %q", msg)
-			d.conn.WriteTo(msg, addr)
+// Serve loops forever to handle discovery requests on the UDP connection.
+func (d *ClientDiscovery) Serve(conn *net.UDPConn) error {
+	defer conn.Close()
+	for {
+		b := make([]byte, 1024)
+		_, addr, err := conn.ReadFrom(b)
+		if err != nil {
+			return err
 		}
-	}()
-
-	return nil
+		msg := message("HTTP/1.0 200 OK", d.Info, d.Port)
+		d.Logger.Debugf("client discovery request from %s", addr)
+		d.Logger.Debugf("sending client discovery response: %q", msg)
+		_, err = conn.WriteTo(msg, addr)
+		if err != nil {
+			return err
+		}
+	}
 }
 
-// Stop shutdowns the broadcast listener and announces the client's removal
-// from the network.
-func (d *ClientDiscovery) Stop() error {
-	d.bye()
-	d.conn.Close()
-	<-d.stopped
-	return nil
-}
-
-func (d *ClientDiscovery) hello() error {
+// Hello announces the client's arrival to the Plex network over UDP. If addr
+// is nil, StandardClientBroadcastAddr is used.
+func (d *ClientDiscovery) Hello(addr *net.UDPAddr) error {
 	d.Logger.Info("announcing client to network")
-	msg := message("HELLO * HTTP/1.0", d)
-	d.Logger.Debugf("HELLO: %q", msg)
-	_, err := d.conn.WriteTo(msg, &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientBroadcastPort,
-	})
-	if err != nil {
-		return fmt.Errorf("error sending HELLO (%s)", err)
+	msg := message("HELLO * HTTP/1.0", d.Info, d.Port)
+	d.Logger.Debugf("sending %q", msg)
+	return send(msg, addr)
+}
+
+// Bye announces the client's departure to the Plex network over UDP. If addr
+// is nil, StandardClientBroadcastAddr is used.
+func (d *ClientDiscovery) Bye(addr *net.UDPAddr) error {
+	d.Logger.Info("removing client from network")
+	msg := message("BYE * HTTP/1.0", d.Info, d.Port)
+	d.Logger.Debugf("sending %q", msg)
+	return send(msg, addr)
+}
+
+func send(msg []byte, addr *net.UDPAddr) error {
+
+	if addr == nil {
+		addr = &StandardClientBroadcastAddr
 	}
+
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return fmt.Errorf("error dialing %s (%s)", addr, err)
+	}
+	defer conn.Close()
+
+	_, err = conn.Write(msg)
+	if err != nil {
+		return fmt.Errorf("error writing msg (%s)", addr, err)
+	}
+
 	return nil
 }
 
-func (d *ClientDiscovery) bye() error {
-	d.Logger.Info("removing player from network")
-	msg := message("BYE * HTTP/1.0", d)
-	d.Logger.Debugf("BYE: %q", msg)
-	_, err := d.conn.WriteTo(msg, &net.UDPAddr{
-		IP:   net.ParseIP(discoveryIP),
-		Port: clientBroadcastPort,
-	})
-	if err != nil {
-		return fmt.Errorf("error sending BYE (%s)", err)
-	}
-	return nil
-}
-
-func message(header string, d *ClientDiscovery) []byte {
+func message(header string, info *ClientInfo, port int) []byte {
 
 	params := map[string]string{
 		"Content-Type":     "plex/media-player",
-		"Name":             d.Info.Name,
-		"Port":             strconv.Itoa(d.Port),
-		"Product":          d.Info.Product,
+		"Name":             info.Name,
+		"Port":             strconv.Itoa(port),
+		"Product":          info.Product,
 		"Protocol":         "plex",
 		"Protocol-Version": "1",
 		// This should come from the client, but I suspect it's irrelevant as
 		// it's the client's players that really have capabilities and those
 		// capabilities are returned by the API.
 		//"Protocol-Capabilities": "timeline,playback",
-		"Resource-Identifier": d.Info.ID,
-		"Version":             d.Info.Version,
+		"Resource-Identifier": info.ID,
+		"Version":             info.Version,
 	}
 
 	w := bytes.NewBuffer(nil)

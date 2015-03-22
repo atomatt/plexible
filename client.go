@@ -155,7 +155,8 @@ type Client struct {
 	registeredControllersLock sync.Mutex
 
 	// Discovery
-	discovery *ClientDiscovery
+	discovery     *ClientDiscovery
+	discoveryConn *net.UDPConn
 
 	// Service cleanup channel
 	shutdown chan bool
@@ -215,17 +216,22 @@ func (c *Client) Start() error {
 	if err != nil {
 		return fmt.Errorf("error starting api (%s)", err)
 	}
-	c.discovery = NewClientDiscovery(c.Info, c.apiPort, c.Logger)
-	err = c.discovery.Start()
+	err = c.startClientDiscovery()
 	if err != nil {
-		return fmt.Errorf("error starting client discovery (%s)", err)
+		return fmt.Errorf("error starting api (%s)", err)
+	}
+
+	err = c.discovery.Hello(nil)
+	if err != nil {
+		return fmt.Errorf("error sending hello (%s)", err)
 	}
 
 	return nil
 }
 
 func (c *Client) Stop() error {
-	c.discovery.Stop()
+	c.discoveryConn.Close()
+	c.discovery.Bye(nil)
 	c.apiListener.Close()
 	<-c.shutdown
 	return nil
@@ -351,6 +357,20 @@ func startClientAPI(c *Client) error {
 		c.Logger.Info("client api shutting down")
 		c.shutdown <- true
 	}()
+
+	return nil
+}
+
+func (c *Client) startClientDiscovery() error {
+
+	discoveryConn, err := net.ListenUDP("udp", &StandardClientDiscoveryAddr)
+	if err != nil {
+		return fmt.Errorf("error creating discovery udp socket (%s)", err)
+	}
+
+	c.discoveryConn = discoveryConn
+	c.discovery = &ClientDiscovery{c.Info, c.apiPort, c.Logger}
+	go c.discovery.Serve(c.discoveryConn)
 
 	return nil
 }
