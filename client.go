@@ -331,7 +331,7 @@ func startClientAPI(c *Client) error {
 	})
 
 	optionsWrapper := func(w http.ResponseWriter, r *http.Request) {
-		c.Logger.Debug(r.Method, r.URL.Path)
+		c.Logger.Debugf("%s %s", r.Method, r.URL.Path)
 		if r.Method == "OPTIONS" {
 			w.Header().Add("Access-Control-Allow-Headers", "x-plex-version, x-plex-platform-version, x-plex-username, x-plex-client-identifier, x-plex-target-client-identifier, x-plex-device-name, x-plex-platform, x-plex-product, accept-language, accept, x-plex-device")
 			w.Header().Add("Access-Control-Allow-Origin", "*")
