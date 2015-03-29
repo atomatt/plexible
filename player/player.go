@@ -36,7 +36,13 @@ func main() {
 	)
 
 	player := NewPlayer(logger)
-	client.AddPlayer("music", player)
+	client.AddPlayer(
+		plexible.TypeMusic,
+		[]string{plexible.CapabilityTimeline, plexible.CapabilityPlayback},
+		player.timeline,
+		player.timelines,
+		player.cmds,
+	)
 
 	if err := client.Start(); err != nil {
 		logger.Fatalf("error starting client: %s", err)
@@ -49,16 +55,17 @@ func main() {
 }
 
 type Player struct {
-	logger   *logrus.Logger
-	cmds     chan interface{}
-	timeline plexible.Timeline
-	ch       chan plexible.Timeline
+	logger    *logrus.Logger
+	cmds      chan interface{}
+	timelines chan plexible.Timeline
+	timeline  plexible.Timeline
 }
 
 func NewPlayer(logger *logrus.Logger) *Player {
 	p := &Player{
-		logger: logger,
-		cmds:   make(chan interface{}),
+		logger:    logger,
+		cmds:      make(chan interface{}),
+		timelines: make(chan plexible.Timeline),
 		timeline: plexible.Timeline{
 			Type:  plexible.TypeMusic,
 			State: plexible.StateStopped,
@@ -68,24 +75,11 @@ func NewPlayer(logger *logrus.Logger) *Player {
 	return p
 }
 
-func (p *Player) Capabilities() []string {
-	return []string{plexible.CapabilityTimeline, plexible.CapabilityPlayback}
-}
-
-func (p *Player) CommandChan() chan interface{} {
-	return p.cmds
-}
-
-func (p *Player) Subscribe() chan plexible.Timeline {
-	p.ch = make(chan plexible.Timeline, 1)
-	p.ch <- p.timeline
-	return p.ch
-}
-
 // run in goroutine
 func (p *Player) cmdLoop() {
 	p.logger.Info("player loop started")
 	defer p.logger.Info("player loop ended")
+
 	for {
 		cmd := <-p.cmds
 		p.logger.Debugf("cmd=%#v", cmd)
@@ -99,6 +93,6 @@ func (p *Player) cmdLoop() {
 		case *plexible.StopCommand:
 			p.timeline.State = plexible.StateStopped
 		}
-		p.ch <- p.timeline
+		p.timelines <- p.timeline
 	}
 }

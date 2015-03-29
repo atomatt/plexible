@@ -26,24 +26,13 @@ type ClientInfo struct {
 	Version string
 }
 
-// A Player is registered with the client and handles playback and control of a
-// specific type of media.
-type Player interface {
-	// Returns a list of the player's capabilities.
-	Capabilities() []string
-	// Returns a channel where the client will send commands it receives from a
-	// controller.
-	CommandChan() chan interface{}
-	// Returns a channel through which the client will receive timeline updates
-	// from the player.
-	Subscribe() chan Timeline
-}
-
-// A playerInfo tracks a registered player and its state.
+// playerInfo holds info about a registered player and its current state.
 type playerInfo struct {
-	Player   Player
-	Type     string
-	Timeline Timeline
+	Type         string
+	Capabilities []string
+	Timeline     Timeline
+	Timelines    <-chan Timeline
+	Cmds         chan<- interface{}
 }
 
 // A controller is a device that controls the client. It is either polling
@@ -163,36 +152,31 @@ func NewClient(info *ClientInfo, logger *logrus.Logger) *Client {
 	}
 }
 
-func (c *Client) AddPlayer(playerType string, player Player) {
+func (c *Client) AddPlayer(playerType string, capabilities []string,
+	timeline Timeline, timelines <-chan Timeline, cmds chan<- interface{}) {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
-	pi := &playerInfo{Type: playerType, Player: player}
-	c.players = append(c.players, pi)
-	ch := player.Subscribe()
+	p := &playerInfo{playerType, capabilities, timeline, timelines, cmds}
+	c.players = append(c.players, p)
 	go func() {
-		c.Logger.Debugf("player %v timeline subscription started", player)
-		defer c.Logger.Errorf("player %v timeline subscription ended", player)
+		c.Logger.Debugf("player %v timeline subscription started", playerType)
+		defer c.Logger.Errorf("player %v timeline subscription ended", playerType)
 		for {
-			t, ok := <-ch
-			if !ok {
+			if t, ok := <-timelines; ok {
+				c.Logger.Debugf("timeline %v from player %v", t, playerType)
+				c.updateTimeline(p, &t)
+				c.notifyControllers()
+			} else {
 				return
 			}
-			c.updateTimeline(player, t)
-			c.notifyControllers()
 		}
 	}()
 }
 
-func (c *Client) updateTimeline(p Player, t Timeline) {
+func (c *Client) updateTimeline(p *playerInfo, t *Timeline) {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
-	c.Logger.Debugf("timeline %v from player %v", t, p)
-	for _, pi := range c.players {
-		if pi.Player == p {
-			pi.Timeline = t
-			break
-		}
-	}
+	p.Timeline = *t
 }
 
 func (c *Client) Start() error {
@@ -233,14 +217,14 @@ func startClientAPI(c *Client) error {
 
 	api.HandleFunc("/resources", func(w http.ResponseWriter, r *http.Request) {
 		players := make([]player, len(c.players))
-		for _, pi := range c.players {
+		for _, p := range c.players {
 			players = append(players, player{
 				Title:                c.Info.Name,
 				MachineIdentifier:    c.Info.ID,
 				Product:              c.Info.Product,
 				Version:              c.Info.Version,
 				ProtocolVersion:      "1",
-				ProtocolCapabilities: strings.Join(pi.Player.Capabilities(), ","),
+				ProtocolCapabilities: strings.Join(p.Capabilities, ","),
 				DeviceClass:          "htpc",
 			})
 		}
@@ -319,13 +303,13 @@ func startClientAPI(c *Client) error {
 			return
 		}
 
-		pi := c.playerForType(playerType)
-		if pi == nil {
+		player := c.playerForType(playerType)
+		if player == nil {
 			c.Logger.Warnf("no player for type %s", playerType)
 			// TODO: return error
 			return
 		}
-		pi.Player.CommandChan() <- &PlayMediaCommand{
+		player.Cmds <- &PlayMediaCommand{
 			serverURL,
 			mc,
 			key,
@@ -355,14 +339,14 @@ func startClientAPI(c *Client) error {
 		}
 
 		playerType := r.FormValue("type")
-		pi := c.playerForType(playerType)
-		if pi == nil {
+		player := c.playerForType(playerType)
+		if player == nil {
 			c.Logger.Warnf("no player for type %s", playerType)
 			// TODO: return error
 			return
 		}
 
-		pi.Player.CommandChan() <- cmd
+		player.Cmds <- cmd
 	})
 
 	api.HandleFunc("/player/timeline/subscribe", func(w http.ResponseWriter, r *http.Request) {
@@ -458,9 +442,9 @@ func (c *Client) updateControllerCommandID(clientID, commandID string) {
 func (c *Client) playerForType(t string) *playerInfo {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
-	for _, pi := range c.players {
-		if pi.Type == t {
-			return pi
+	for _, p := range c.players {
+		if p.Type == t {
+			return p
 		}
 	}
 	return nil
@@ -470,8 +454,8 @@ func (c *Client) collectTimelines() []Timeline {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
 	t := make([]Timeline, len(c.players))
-	for _, pi := range c.players {
-		t = append(t, pi.Timeline)
+	for _, p := range c.players {
+		t = append(t, p.Timeline)
 	}
 	return t
 }
