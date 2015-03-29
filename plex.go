@@ -129,6 +129,7 @@ type player struct {
 type PlayMediaCommand struct {
 	ServerURL      string
 	MediaContainer *MediaContainer
+	ContainerKey   string
 	Key            string
 	Offset         uint64
 }

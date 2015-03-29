@@ -277,12 +277,13 @@ func startClientAPI(c *Client) error {
 		commandID := r.FormValue("commandID")
 		c.updateControllerCommandID(controllerID, commandID)
 
+		containerKey := r.FormValue("containerKey")
 		key := r.FormValue("key")
 		offset, _ := strconv.ParseUint(r.FormValue("offset"), 10, 64)
 
 		serverURL := fmt.Sprintf("%s://%s:%s", r.FormValue("protocol"),
 			r.FormValue("address"), r.FormValue("port"))
-		url := fmt.Sprintf("%s%s", serverURL, r.FormValue("containerKey"))
+		url := fmt.Sprintf("%s%s", serverURL, containerKey)
 
 		c.Logger.Debugf("fetching play media from %s", url)
 		mc := &MediaContainer{}
@@ -312,6 +313,7 @@ func startClientAPI(c *Client) error {
 		player.Cmds <- &PlayMediaCommand{
 			serverURL,
 			mc,
+			containerKey,
 			key,
 			offset,
 		}
