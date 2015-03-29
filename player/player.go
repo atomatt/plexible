@@ -50,7 +50,7 @@ func main() {
 
 type Player struct {
 	logger   *logrus.Logger
-	cmds     chan plexible.PlayerCommand
+	cmds     chan interface{}
 	timeline plexible.Timeline
 	ch       chan plexible.Timeline
 }
@@ -58,7 +58,7 @@ type Player struct {
 func NewPlayer(logger *logrus.Logger) *Player {
 	p := &Player{
 		logger: logger,
-		cmds:   make(chan plexible.PlayerCommand),
+		cmds:   make(chan interface{}),
 		timeline: plexible.Timeline{
 			Type:  plexible.TypeMusic,
 			State: plexible.StateStopped,
@@ -72,7 +72,7 @@ func (p *Player) Capabilities() []string {
 	return []string{plexible.CapabilityTimeline, plexible.CapabilityPlayback}
 }
 
-func (p *Player) CommandChan() chan plexible.PlayerCommand {
+func (p *Player) CommandChan() chan interface{} {
 	return p.cmds
 }
 
@@ -88,15 +88,15 @@ func (p *Player) cmdLoop() {
 	defer p.logger.Info("player loop ended")
 	for {
 		cmd := <-p.cmds
-		p.logger.Debugf("Cmd: %v, Params: %v", cmd.Type, cmd.Params)
-		switch cmd.Type {
-		case "playMedia":
+		p.logger.Debugf("cmd=%#v", cmd)
+		switch cmd.(type) {
+		case *plexible.PlayMediaCommand:
 			p.timeline.State = plexible.StatePlaying
-		case "pause":
+		case *plexible.PauseCommand:
 			p.timeline.State = plexible.StatePaused
-		case "play":
+		case *plexible.PlayCommand:
 			p.timeline.State = plexible.StatePlaying
-		case "stop":
+		case *plexible.StopCommand:
 			p.timeline.State = plexible.StateStopped
 		}
 		p.ch <- p.timeline

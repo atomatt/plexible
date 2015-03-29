@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,19 +33,10 @@ type Player interface {
 	Capabilities() []string
 	// Returns a channel where the client will send commands it receives from a
 	// controller.
-	CommandChan() chan PlayerCommand
+	CommandChan() chan interface{}
 	// Returns a channel through which the client will receive timeline updates
 	// from the player.
 	Subscribe() chan Timeline
-}
-
-// A PlayerCommand is sent to a player when the client receives a command from
-// a controller.
-type PlayerCommand struct {
-	// Command type.
-	Type string
-	// Command params.
-	Params url.Values
 }
 
 // A playerInfo tracks a registered player and its state.
@@ -297,16 +287,77 @@ func startClientAPI(c *Client) error {
 		w.Write(msg)
 	})
 
-	api.HandleFunc("/player/playback/", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("/player/playback/playMedia", func(w http.ResponseWriter, r *http.Request) {
+
 		controllerID := r.Header.Get("X-Plex-Client-Identifier")
-		cmdType := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-		r.ParseForm()
-		// Record controller's command ID.
-		c.updateControllerCommandID(controllerID, r.FormValue("commandID"))
-		// Send command to player for type.
-		if pi := c.playerForType(r.FormValue("type")); pi != nil {
-			pi.Player.CommandChan() <- PlayerCommand{Type: cmdType, Params: r.Form}
+		commandID := r.FormValue("commandID")
+		c.updateControllerCommandID(controllerID, commandID)
+
+		serverURL := fmt.Sprintf("%s://%s:%s", r.FormValue("protocol"),
+			r.FormValue("address"), r.FormValue("port"))
+		url := fmt.Sprintf("%s%s", serverURL, r.FormValue("containerKey"))
+
+		c.Logger.Debugf("fetching play media from %s", url)
+		mc := &MediaContainer{}
+		err := getXML(url, mc)
+		if err != nil {
+			c.Logger.Errorf("error retrieving media container from %s (%s)", url, err)
+			// TODO: return error
+			return
 		}
+
+		var playerType string
+		switch {
+		case mc.Tracks != nil:
+			playerType = TypeMusic
+		default:
+			c.Logger.Errorf("can't determine type of player")
+			// TODO: return error
+			return
+		}
+
+		pi := c.playerForType(playerType)
+		if pi == nil {
+			c.Logger.Warnf("no player for type %s", playerType)
+			// TODO: return error
+			return
+		}
+		pi.Player.CommandChan() <- &PlayMediaCommand{
+			serverURL,
+			mc,
+		}
+	})
+
+	api.HandleFunc("/player/playback/", func(w http.ResponseWriter, r *http.Request) {
+
+		controllerID := r.Header.Get("X-Plex-Client-Identifier")
+		commandID := r.FormValue("commandID")
+		c.updateControllerCommandID(controllerID, commandID)
+
+		cmdType := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		var cmd interface{}
+		switch cmdType {
+		case "pause":
+			cmd = &PauseCommand{}
+		case "play":
+			cmd = &PlayCommand{}
+		case "stop":
+			cmd = &StopCommand{}
+		default:
+			c.Logger.Warnf("unrecognised player command %s", cmdType)
+			// TODO: return error
+			return
+		}
+
+		playerType := r.FormValue("type")
+		pi := c.playerForType(playerType)
+		if pi == nil {
+			c.Logger.Warnf("no player for type %s", playerType)
+			// TODO: return error
+			return
+		}
+
+		pi.Player.CommandChan() <- cmd
 	})
 
 	api.HandleFunc("/player/timeline/subscribe", func(w http.ResponseWriter, r *http.Request) {
@@ -358,6 +409,19 @@ func startClientAPI(c *Client) error {
 		c.shutdown <- true
 	}()
 
+	return nil
+}
+
+func getXML(url string, v interface{}) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	err = xml.NewDecoder(resp.Body).Decode(v)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
