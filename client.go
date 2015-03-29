@@ -151,8 +151,8 @@ type Client struct {
 	playersLock sync.Mutex
 
 	// Controllers
-	registeredControllers     []*registeredController
-	registeredControllersLock sync.Mutex
+	controllers     []*registeredController
+	controllersLock sync.Mutex
 
 	// Discovery
 	discovery     *ClientDiscovery
@@ -376,9 +376,9 @@ func (c *Client) startClientDiscovery() error {
 }
 
 func (c *Client) updateControllerCommandID(clientID, commandID string) {
-	c.registeredControllersLock.Lock()
-	defer c.registeredControllersLock.Unlock()
-	for _, rc := range c.registeredControllers {
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
+	for _, rc := range c.controllers {
 		if rc.controller.ClientID() == clientID {
 			rc.commandID = commandID
 			break
@@ -408,11 +408,11 @@ func (c *Client) collectTimelines() []Timeline {
 }
 
 func (c *Client) registerSubscribingController(clientID, url, commandID string) *registeredController {
-	c.registeredControllersLock.Lock()
-	defer c.registeredControllersLock.Unlock()
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
 
 	// Existing controller ... reset its timeout and update command ID.
-	for _, rc := range c.registeredControllers {
+	for _, rc := range c.controllers {
 		if rc.controller.ClientID() == clientID {
 			c.Logger.Debugf("resetting timeout for subscribing controller %s", clientID)
 			rc.timeout.Reset(controllerTimeout)
@@ -430,29 +430,29 @@ func (c *Client) registerSubscribingController(clientID, url, commandID string) 
 		}),
 		commandID,
 	}
-	c.registeredControllers = append(c.registeredControllers, rc)
+	c.controllers = append(c.controllers, rc)
 	return rc
 }
 
 func (c *Client) registerPollingController(clientID string, ch chan *MediaContainer, commandID string) *registeredController {
-	c.registeredControllersLock.Lock()
-	defer c.registeredControllersLock.Unlock()
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
 	c.Logger.Infof("adding polling controller %s", clientID)
 	rc := &registeredController{
 		controller: &pollingController{clientID: clientID, ch: ch},
 		commandID:  commandID,
 	}
-	c.registeredControllers = append(c.registeredControllers, rc)
+	c.controllers = append(c.controllers, rc)
 	return rc
 }
 
 func (c *Client) forgetController(clientID string) {
-	c.registeredControllersLock.Lock()
-	defer c.registeredControllersLock.Unlock()
-	for i, rc := range c.registeredControllers {
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
+	for i, rc := range c.controllers {
 		if rc.controller.ClientID() == clientID {
 			c.Logger.Infof("forgetting controller %s", clientID)
-			c.registeredControllers = append(c.registeredControllers[:i], c.registeredControllers[i+1:]...)
+			c.controllers = append(c.controllers[:i], c.controllers[i+1:]...)
 			if rc.timeout != nil {
 				rc.timeout.Stop()
 			}
@@ -462,10 +462,10 @@ func (c *Client) forgetController(clientID string) {
 }
 
 func (c *Client) notifyControllers() {
-	c.registeredControllersLock.Lock()
-	defer c.registeredControllersLock.Unlock()
+	c.controllersLock.Lock()
+	defer c.controllersLock.Unlock()
 	t := c.collectTimelines()
-	for _, rc := range c.registeredControllers {
+	for _, rc := range c.controllers {
 		c.SendTimeline(rc, t)
 	}
 }
