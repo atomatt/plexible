@@ -129,6 +129,8 @@ type player struct {
 type PlayMediaCommand struct {
 	ServerURL      string
 	MediaContainer *MediaContainer
+	Key            string
+	Offset         uint64
 }
 
 // PauseCommand is sent to a player to pause playback.

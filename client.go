@@ -293,6 +293,9 @@ func startClientAPI(c *Client) error {
 		commandID := r.FormValue("commandID")
 		c.updateControllerCommandID(controllerID, commandID)
 
+		key := r.FormValue("key")
+		offset, _ := strconv.ParseUint(r.FormValue("offset"), 10, 64)
+
 		serverURL := fmt.Sprintf("%s://%s:%s", r.FormValue("protocol"),
 			r.FormValue("address"), r.FormValue("port"))
 		url := fmt.Sprintf("%s%s", serverURL, r.FormValue("containerKey"))
@@ -325,6 +328,8 @@ func startClientAPI(c *Client) error {
 		pi.Player.CommandChan() <- &PlayMediaCommand{
 			serverURL,
 			mc,
+			key,
+			offset,
 		}
 	})
 
