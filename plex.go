@@ -124,3 +124,21 @@ type player struct {
 	ProtocolCapabilities string `xml:"protocolCapabilities,attr"`
 	DeviceClass          string `xml:"deviceClass,attr"`
 }
+
+// PlayMediaCommand is sent to a player to start playback of new media.
+type PlayMediaCommand struct {
+	ServerURL      string
+	MediaContainer *MediaContainer
+}
+
+// PauseCommand is sent to a player to pause playback.
+type PauseCommand struct {
+}
+
+// PlayCommand is sent to a player to resume playback.
+type PlayCommand struct {
+}
+
+// StopCommand is sent to a player to stop playback.
+type StopCommand struct {
+}
