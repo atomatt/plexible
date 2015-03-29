@@ -33,7 +33,7 @@ type Track struct {
 	Thumb                string `xml:"thumb,attr,omitempty"`
 	ParentThumb          string `xml:"parentThumb,attr,omitempty"`
 	GrandparentThumb     string `xml:"grandparentThumb,attr,omitempty"`
-	Duration             int    `xml:"duration,attr,omitempty"`
+	Duration             uint64 `xml:"duration,attr,omitempty"`
 	AddedAt              int    `xml:"addedAt,attr,omitempty"`
 	UpdatedAt            int    `xml:"updatedAt,attr,omitempty"`
 	Media                *Media `xml:"Media,omitempty"`
@@ -42,7 +42,7 @@ type Track struct {
 // Media is an audio track media element.
 type Media struct {
 	ID            int    `xml:"id,attr,omitempty"`
-	Duration      int    `xml:"duration,attr,omitempty"`
+	Duration      uint64 `xml:"duration,attr,omitempty"`
 	Bitrate       int    `xml:"bitrate,attr,omitempty"`
 	AudioChannels int    `xml:"audioChannels,attr,omitempty"`
 	AudioCodec    string `xml:"audioCodec,attr,omitempty"`
@@ -54,7 +54,7 @@ type Media struct {
 type Part struct {
 	ID        int      `xml:"id,attr,omitempty"`
 	Key       string   `xml:"key,attr,omitempty"`
-	Duration  int      `xml:"duration,attr,omitempty"`
+	Duration  uint64   `xml:"duration,attr,omitempty"`
 	File      string   `xml:"file,attr,omitempty"`
 	Size      int      `xml:"size,attr,omitempty"`
 	Container string   `xml:"container,attr,omitempty"`
@@ -71,7 +71,7 @@ type Stream struct {
 	Channels     int    `xml:"channels,attr,omitempty"`
 	Bitrate      int    `xml:"bitrate,attr,omitempty"`
 	BitrateMode  string `xml:"bitrateMode,attr,omitempty"`
-	Duration     int    `xml:"duration,attr,omitempty"`
+	Duration     uint64 `xml:"duration,attr,omitempty"`
 	SamplingRate int    `xml:"samplingRate,attr,omitempty"`
 }
 
@@ -87,8 +87,8 @@ const (
 // Timeline repesents the current state of a Player.
 type Timeline struct {
 	State    string `xml:"state,attr,omitempty"`
-	Duration int64  `xml:"duration,attr,omitempty"`
-	Time     int64  `xml:"time,attr,omitempty"`
+	Duration uint64 `xml:"duration,attr,omitempty"`
+	Time     uint64 `xml:"time,attr,omitempty"`
 	Type     string `xml:"type,attr,omitempty"`
 }
 
