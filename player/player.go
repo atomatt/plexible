@@ -39,10 +39,13 @@ func main() {
 	client.AddPlayer(
 		plexible.TypeMusic,
 		[]string{plexible.CapabilityTimeline, plexible.CapabilityPlayback},
-		player.timeline,
 		player.timelines,
 		player.cmds,
 	)
+	player.timelines <- &plexible.Timeline{
+		Type:  plexible.TypeMusic,
+		State: plexible.StateStopped,
+	}
 
 	if err := client.Start(); err != nil {
 		logger.Fatalf("error starting client: %s", err)
@@ -57,19 +60,15 @@ func main() {
 type Player struct {
 	logger    *logrus.Logger
 	cmds      chan interface{}
-	timelines chan plexible.Timeline
-	timeline  plexible.Timeline
+	timelines chan *plexible.Timeline
+	state     string
 }
 
 func NewPlayer(logger *logrus.Logger) *Player {
 	p := &Player{
 		logger:    logger,
 		cmds:      make(chan interface{}),
-		timelines: make(chan plexible.Timeline),
-		timeline: plexible.Timeline{
-			Type:  plexible.TypeMusic,
-			State: plexible.StateStopped,
-		},
+		timelines: make(chan *plexible.Timeline),
 	}
 	go p.cmdLoop()
 	return p
@@ -85,14 +84,17 @@ func (p *Player) cmdLoop() {
 		p.logger.Debugf("cmd=%#v", cmd)
 		switch cmd.(type) {
 		case *plexible.PlayMediaCommand:
-			p.timeline.State = plexible.StatePlaying
+			p.state = plexible.StatePlaying
 		case *plexible.PauseCommand:
-			p.timeline.State = plexible.StatePaused
+			p.state = plexible.StatePaused
 		case *plexible.PlayCommand:
-			p.timeline.State = plexible.StatePlaying
+			p.state = plexible.StatePlaying
 		case *plexible.StopCommand:
-			p.timeline.State = plexible.StateStopped
+			p.state = plexible.StateStopped
 		}
-		p.timelines <- p.timeline
+		p.timelines <- &plexible.Timeline{
+			Type:  plexible.TypeMusic,
+			State: p.state,
+		}
 	}
 }

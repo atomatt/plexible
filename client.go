@@ -30,8 +30,8 @@ type ClientInfo struct {
 type playerInfo struct {
 	Type         string
 	Capabilities []string
-	Timeline     Timeline
-	Timelines    <-chan Timeline
+	Timeline     *Timeline
+	Timelines    <-chan *Timeline
 	Cmds         chan<- interface{}
 }
 
@@ -153,10 +153,10 @@ func NewClient(info *ClientInfo, logger *logrus.Logger) *Client {
 }
 
 func (c *Client) AddPlayer(playerType string, capabilities []string,
-	timeline Timeline, timelines <-chan Timeline, cmds chan<- interface{}) {
+	timelines <-chan *Timeline, cmds chan<- interface{}) {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
-	p := &playerInfo{playerType, capabilities, timeline, timelines, cmds}
+	p := &playerInfo{playerType, capabilities, nil, timelines, cmds}
 	c.players = append(c.players, p)
 	go func() {
 		c.Logger.Debugf("player %v timeline subscription started", playerType)
@@ -164,19 +164,13 @@ func (c *Client) AddPlayer(playerType string, capabilities []string,
 		for {
 			if t, ok := <-timelines; ok {
 				c.Logger.Debugf("timeline %v from player %v", t, playerType)
-				c.updateTimeline(p, &t)
+				p.Timeline = t
 				c.notifyControllers()
 			} else {
 				return
 			}
 		}
 	}()
-}
-
-func (c *Client) updateTimeline(p *playerInfo, t *Timeline) {
-	c.playersLock.Lock()
-	defer c.playersLock.Unlock()
-	p.Timeline = *t
 }
 
 func (c *Client) Start() error {
@@ -457,7 +451,9 @@ func (c *Client) collectTimelines() []Timeline {
 	defer c.playersLock.Unlock()
 	t := make([]Timeline, len(c.players))
 	for _, p := range c.players {
-		t = append(t, p.Timeline)
+		if p.Timeline != nil {
+			t = append(t, *p.Timeline)
+		}
 	}
 	return t
 }
