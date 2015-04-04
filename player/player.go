@@ -42,8 +42,7 @@ func main() {
 		player.timelines,
 		player.cmds,
 	)
-	player.timelines <- &plexible.Timeline{
-		Type:  plexible.TypeMusic,
+	player.timelines <- &plexible.PlayerTimeline{
 		State: plexible.StateStopped,
 	}
 
@@ -60,7 +59,7 @@ func main() {
 type Player struct {
 	logger    *logrus.Logger
 	cmds      chan interface{}
-	timelines chan *plexible.Timeline
+	timelines chan *plexible.PlayerTimeline
 	state     string
 }
 
@@ -68,7 +67,7 @@ func NewPlayer(logger *logrus.Logger) *Player {
 	p := &Player{
 		logger:    logger,
 		cmds:      make(chan interface{}),
-		timelines: make(chan *plexible.Timeline),
+		timelines: make(chan *plexible.PlayerTimeline),
 	}
 	go p.cmdLoop()
 	return p
@@ -92,8 +91,7 @@ func (p *Player) cmdLoop() {
 		case *plexible.StopCommand:
 			p.state = plexible.StateStopped
 		}
-		p.timelines <- &plexible.Timeline{
-			Type:  plexible.TypeMusic,
+		p.timelines <- &plexible.PlayerTimeline{
 			State: p.state,
 		}
 	}

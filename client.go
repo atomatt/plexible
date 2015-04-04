@@ -30,8 +30,8 @@ type ClientInfo struct {
 type playerInfo struct {
 	Type         string
 	Capabilities []string
-	Timeline     *Timeline
-	Timelines    <-chan *Timeline
+	Timeline     *PlayerTimeline
+	Timelines    <-chan *PlayerTimeline
 	Cmds         chan<- interface{}
 }
 
@@ -153,7 +153,7 @@ func NewClient(info *ClientInfo, logger *logrus.Logger) *Client {
 }
 
 func (c *Client) AddPlayer(playerType string, capabilities []string,
-	timelines <-chan *Timeline, cmds chan<- interface{}) {
+	timelines <-chan *PlayerTimeline, cmds chan<- interface{}) {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
 	p := &playerInfo{playerType, capabilities, nil, timelines, cmds}
@@ -452,7 +452,7 @@ func (c *Client) collectTimelines() []Timeline {
 	t := make([]Timeline, len(c.players))
 	for _, p := range c.players {
 		if p.Timeline != nil {
-			t = append(t, *p.Timeline)
+			t = append(t, Timeline{PlayerTimeline: p.Timeline, Type: p.Type})
 		}
 	}
 	return t

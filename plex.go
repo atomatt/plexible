@@ -84,12 +84,19 @@ const (
 	CapabilityPlayQueues = "playqueues"
 )
 
-// Timeline repesents the current state of a Player.
-type Timeline struct {
+// PlayerTimeline repesents the state of a Player. It does not include the
+// fields that are better for the Client to add.
+type PlayerTimeline struct {
 	State    string `xml:"state,attr,omitempty"`
 	Duration uint64 `xml:"duration,attr,omitempty"`
 	Time     uint64 `xml:"time,attr,omitempty"`
-	Type     string `xml:"type,attr,omitempty"`
+}
+
+// Timeline repesents the current state of a Player, including attributes
+// better handled by the Client.
+type Timeline struct {
+	*PlayerTimeline
+	Type string `xml:"type,attr,omitempty"`
 }
 
 // Player types.
