@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/emgee/plexible"
@@ -60,7 +61,6 @@ type Player struct {
 	logger    *logrus.Logger
 	cmds      chan interface{}
 	timelines chan *plexible.PlayerTimeline
-	state     string
 }
 
 func NewPlayer(logger *logrus.Logger) *Player {
@@ -78,21 +78,63 @@ func (p *Player) cmdLoop() {
 	p.logger.Info("player loop started")
 	defer p.logger.Info("player loop ended")
 
+	var ticker *time.Ticker
+	var tickerC <-chan time.Time
+
+	state := plexible.StateStopped
+	var containerKey string
+	var tracks []plexible.Track
+	var playTime uint64 = 0
+
 	for {
-		cmd := <-p.cmds
-		p.logger.Debugf("cmd=%#v", cmd)
-		switch cmd.(type) {
-		case *plexible.PlayMediaCommand:
-			p.state = plexible.StatePlaying
-		case *plexible.PauseCommand:
-			p.state = plexible.StatePaused
-		case *plexible.PlayCommand:
-			p.state = plexible.StatePlaying
-		case *plexible.StopCommand:
-			p.state = plexible.StateStopped
+		select {
+		case <-tickerC:
+			if state == plexible.StatePlaying {
+				playTime += 1000
+			}
+		case cmd := <-p.cmds:
+			p.logger.Debugf("cmd=%#v", cmd)
+			switch v := cmd.(type) {
+			case *plexible.PlayMediaCommand:
+				// Set initial play state.
+				state = plexible.StatePlaying
+				containerKey = v.ContainerKey
+				tracks = v.MediaContainer.Tracks
+				playTime = 0
+				// Start ticker for time updates.
+				ticker = time.NewTicker(time.Second)
+				tickerC = ticker.C
+			case *plexible.PauseCommand:
+				// Stop ticker.
+				tickerC = nil
+				ticker.Stop()
+				// Update play state
+				state = plexible.StatePaused
+			case *plexible.PlayCommand:
+				// Update play state.
+				state = plexible.StatePlaying
+				// Start ticker
+				ticker = time.NewTicker(time.Second)
+				tickerC = ticker.C
+			case *plexible.StopCommand:
+				// Stop ticker.
+				tickerC = nil
+				ticker.Stop()
+				// Clear play state.
+				state = plexible.StateStopped
+				containerKey = ""
+				tracks = nil
+				playTime = 0
+			}
 		}
-		p.timelines <- &plexible.PlayerTimeline{
-			State: p.state,
+		t := &plexible.PlayerTimeline{State: state}
+		if tracks != nil {
+			t.Time = playTime
+			t.ContainerKey = containerKey
+			t.RatingKey = tracks[0].RatingKey
+			t.Key = tracks[0].Key
+			t.Duration = tracks[0].Duration
 		}
+		p.timelines <- t
 	}
 }
