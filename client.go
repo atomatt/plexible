@@ -449,7 +449,7 @@ func (c *Client) playerForType(t string) *playerInfo {
 func (c *Client) collectTimelines() []Timeline {
 	c.playersLock.Lock()
 	defer c.playersLock.Unlock()
-	t := make([]Timeline, len(c.players))
+	t := make([]Timeline, 0, len(c.players))
 	for _, p := range c.players {
 		if p.Timeline != nil {
 			t = append(t, Timeline{PlayerTimeline: p.Timeline, Type: p.Type})
