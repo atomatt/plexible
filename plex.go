@@ -87,9 +87,12 @@ const (
 // PlayerTimeline repesents the state of a Player. It does not include the
 // fields that are better for the Client to add.
 type PlayerTimeline struct {
-	State    string `xml:"state,attr,omitempty"`
-	Duration uint64 `xml:"duration,attr,omitempty"`
-	Time     uint64 `xml:"time,attr,omitempty"`
+	State        string `xml:"state,attr,omitempty"`
+	Duration     uint64 `xml:"duration,attr,omitempty"`
+	Time         uint64 `xml:"time,attr,omitempty"`
+	RatingKey    int    `xml:"ratingKey,attr,omitempty"`
+	Key          string `xml:"key,attr,omitempty"`
+	ContainerKey string `xml:"containerKey,attr,omitempty"`
 }
 
 // Timeline repesents the current state of a Player, including attributes
